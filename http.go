@@ -174,12 +174,6 @@ func (h *httpHandler) handleRequest(conn net.Conn, req *http.Request) {
 		Header:     http.Header{},
 	}
 
-	proxyAgent := DefaultProxyAgent
-	if h.options.ProxyAgent != "" {
-		proxyAgent = h.options.ProxyAgent
-	}
-	resp.Header.Add("Proxy-Agent", proxyAgent)
-
 	if !Can("tcp", host, h.options.Whitelist, h.options.Blacklist) {
 		log.Logf("[http] %s - %s : Unauthorized to tcp connect to %s",
 			conn.RemoteAddr(), conn.LocalAddr(), host)
@@ -293,8 +287,7 @@ func (h *httpHandler) handleRequest(conn net.Conn, req *http.Request) {
 	defer cc.Close()
 
 	if req.Method == http.MethodConnect {
-		b := []byte("HTTP/1.1 200 Connection established\r\n" +
-			"Proxy-Agent: " + proxyAgent + "\r\n\r\n")
+		b := []byte("HTTP/1.1 200 Connection established\r\n\r\n")
 		if Debug {
 			log.Logf("[http] %s <- %s\n%s", conn.RemoteAddr(), conn.LocalAddr(), string(b))
 		}
@@ -319,7 +312,25 @@ func (h *httpHandler) authenticate(conn net.Conn, req *http.Request, resp *http.
 		log.Logf("[http] %s -> %s : Authorization '%s' '%s'",
 			conn.RemoteAddr(), conn.LocalAddr(), u, p)
 	}
-	if h.options.Authenticator == nil || h.options.Authenticator.Authenticate(u, p) {
+	ip := ""
+	addr := conn.RemoteAddr().String()
+	lastIndex := strings.LastIndex(addr, ":")
+	if lastIndex > 0 {
+		ip = addr[:lastIndex]
+	}
+	ga := GetGlobalAuthenticator()
+	has_gauth := false
+	if ga != nil {
+		has_gauth = true
+		if ga.Auth(u, p, ip) {
+			if Debug {
+				log.Logf("[http] %s -> %s : GAuth ok '%s' '%s' '%s'",
+					conn.RemoteAddr(), conn.LocalAddr(), u, p, ip)
+			}
+			return true
+		}
+	}
+	if !has_gauth && (h.options.Authenticator == nil || h.options.Authenticator.Authenticate(u, p)) {
 		return true
 	}
 
@@ -369,7 +380,7 @@ func (h *httpHandler) authenticate(conn net.Conn, req *http.Request, resp *http.
 		log.Logf("[http] %s <- %s : proxy authentication required",
 			conn.RemoteAddr(), conn.LocalAddr())
 		resp.StatusCode = http.StatusProxyAuthRequired
-		resp.Header.Add("Proxy-Authenticate", "Basic realm=\"gost\"")
+		resp.Header.Add("Proxy-Authenticate", "Basic realm=\"Auth\"")
 		if strings.ToLower(req.Header.Get("Proxy-Connection")) == "keep-alive" {
 			// XXX libcurl will keep sending auth request in same conn
 			// which we don't supported yet.

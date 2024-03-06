@@ -115,6 +115,9 @@ func start() error {
 	if len(routers) == 0 {
 		return errors.New("invalid config")
 	}
+
+	gost.InitGlobalAuthenticator("secrets.txt")
+
 	for i := range routers {
 		go routers[i].Serve()
 	}

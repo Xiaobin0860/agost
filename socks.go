@@ -58,7 +58,7 @@ func (selector *clientSelector) AddMethod(methods ...uint8) {
 	selector.methods = append(selector.methods, methods...)
 }
 
-func (selector *clientSelector) Select(methods ...uint8) (method uint8) {
+func (selector *clientSelector) Select(conn net.Conn, methods ...uint8) (method uint8) {
 	return
 }
 
@@ -122,11 +122,35 @@ func (selector *serverSelector) AddMethod(methods ...uint8) {
 	selector.methods = append(selector.methods, methods...)
 }
 
-func (selector *serverSelector) Select(methods ...uint8) (method uint8) {
+func (selector *serverSelector) Select(conn net.Conn, methods ...uint8) (method uint8) {
 	if Debug {
-		log.Logf("[socks5] %d %d %v", gosocks5.Ver5, len(methods), methods)
+		log.Logf("[socks5] Select %d %d %v %s", gosocks5.Ver5, len(methods), methods, conn.RemoteAddr())
 	}
 	method = gosocks5.MethodNoAuth
+	ga := GetGlobalAuthenticator()
+	addr := conn.RemoteAddr().String()
+	lastIndex := strings.LastIndex(addr, ":")
+	ip := ""
+	if lastIndex > 0 {
+		ip = addr[:lastIndex]
+	}
+	if ga != nil {
+		is_white, has_auth := ga.IsWhite(ip)
+		if is_white {
+			//白名单直接通过
+			if Debug {
+				log.Log("[socks5] GAuth IsWhite return MethodNoAuth")
+			}
+			return
+		}
+		if has_auth {
+			if Debug {
+				log.Log("[socks5] GAuth return MethodUserPass")
+			}
+			method = gosocks5.MethodUserPass
+			return
+		}
+	}
 	for _, m := range methods {
 		if m == MethodTLS {
 			method = m
@@ -169,7 +193,8 @@ func (selector *serverSelector) OnSelected(method uint8, conn net.Conn) (net.Con
 			log.Logf("[socks5] %s - %s: %s", conn.RemoteAddr(), conn.LocalAddr(), req.String())
 		}
 
-		if selector.Authenticator != nil && !selector.Authenticator.Authenticate(req.Username, req.Password) {
+		ga := GetGlobalAuthenticator()
+		if (ga != nil && !ga.Authenticate(req.Username, req.Password)) || (selector.Authenticator != nil && !selector.Authenticator.Authenticate(req.Username, req.Password)) {
 			resp := gosocks5.NewUserPassResponse(gosocks5.UserPassVer, gosocks5.Failure)
 			if err := resp.Write(conn); err != nil {
 				log.Logf("[socks5] %s - %s: %s", conn.RemoteAddr(), conn.LocalAddr(), err)
